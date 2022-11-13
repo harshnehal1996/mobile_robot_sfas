@@ -35,6 +35,7 @@ class Var:
 	cost_threshold = 55
 	heatmap = None
 	hidden_2_world = None
+	listener = None
 	y_max = 0
 	x_max = 0
 	y_min = 0
@@ -127,7 +128,7 @@ def qr_pos_callback(message):
 			if abs(message.header.stamp.secs - QR.timestamp) > Var.tolerance:
 				Var.QRMsgs[Var.jobs[0]] = None
 			else:
-				(trans,orient) = listener.lookupTransform('/map', '/camera_link', rospy.Time())
+				(trans,orient) = Var.listener.lookupTransform('/map', '/camera_link', rospy.Time())
 				quat = np.array([message.pose.position.x, message.pose.position.y, message.pose.position.z, 0])
 				iorient = tf.transformations.quaternion_inverse(orient)
 				res = tf.transformations.quaternion_multiply(orient, quat)
@@ -231,10 +232,10 @@ def local_map_callback(data):
 	LocalFrame.occupancy_grid = np.array([data.data]).reshape(LocalFrame.height, LocalFrame.width)
 	Var.mutex.release()
 
-def execute_360_turn(client, listener):
+def execute_360_turn(client):
 	i = 0
 	for angle in [0, np.pi, 2*np.pi]:
-		(trans,rot) = listener.lookupTransform('/map', '/base_footprint', rospy.Time())
+		(trans,rot) = Var.listener.lookupTransform('/map', '/base_footprint', rospy.Time())
 		orientation = tf_conversions.transformations.quaternion_from_euler(0,0,angle)
 		goal_pose = MoveBaseGoal()
 		goal_pose.target_pose.header.frame_id = 'map'
@@ -341,6 +342,7 @@ def main():
 	sigma = 5
 	kernel = 1e3 * np.fromfunction(lambda x, y: (1/(2*math.pi*sigma**2)) * math.e ** ((-1*((x-(size-1)/2)**2+(y-(size-1)/2)**2))/(2*sigma**2)), (size, size))
 	listener = tf.TransformListener()
+	Var.listener = listener
 
 	while not rospy.is_shutdown():
 		if Var.explore_phase:
@@ -351,7 +353,7 @@ def main():
 				print("success" if ret else "timeout")
 				(trans, rots) = listener.lookupTransform('/map','/base_footprint', rospy.Time())
 				increment_heatmap(trans[0], trans[1], kernel)
-				execute_360_turn(client, listener)
+				execute_360_turn(client)
 			if has_hidden_loc():
 				Var.explore_phase = False
 				sub1.unregister()
