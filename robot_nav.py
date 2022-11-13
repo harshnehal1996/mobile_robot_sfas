@@ -127,18 +127,16 @@ def qr_pos_callback(message):
 			if abs(message.header.stamp.secs - QR.timestamp) > Var.tolerance:
 				Var.QRMsgs[Var.jobs[0]] = None
 			else:
-				QR.x_map = message.pose.position.x 
-				QR.y_map = message.pose.position.y 
-				QR.z_map = message.pose.position.z 
-				QR.x_orientation_map = message.pose.orientation.x 
-				QR.y_orientation_map = message.pose.orientation.y 
-				QR.z_orientation_map = message.pose.orientation.z
-				QR.w_orientation_map = message.pose.orientation.w
+				(trans,orient) = listener.lookupTransform('/map', '/camera_link', rospy.Time())
+				quat = np.array([message.pose.position.x, message.pose.position.y, message.pose.position.z, 0])
+				iorient = tf.transformations.quaternion_inverse(orient)
+				res = tf.transformations.quaternion_multiply(orient, quat)
+        		res = tf.transformations.quaternion_multiply(res, iorient)
+				QR.x_map, QR.y_map, QR.z_map = res[:3] + trans
 				QR.observation_complete = True
 			Var.jobs.pop(0)
 
 		Var.qr_mutex.release()
-
 
 def has_hidden_loc():
 	qr_msg = [msg for msg in Var.QRMsgs if msg is not None and msg.observation_complete]
@@ -360,7 +358,7 @@ def main():
 				sub2.unregister()
 				print("end of explore phase : ", Var.hidden_2_world)
 		else:
-			if not execute_round_search(client, 10, 20, 30):
+			if not execute_round_search(client, 15, 36, 30):
 				break
 
 		r.sleep()
@@ -395,6 +393,7 @@ if __name__ == '__main__':
 # y_min = -4.066
 # y_max_2 = 4.144
 # x_min = -7.699
+# 0.8 minimum view
 
 
 
