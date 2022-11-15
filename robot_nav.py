@@ -12,6 +12,7 @@ import re
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
 import matplotlib.pyplot as plt
+import time
 
 # /move_base/global_costmap/inflation_layer/set_parameters dynamic_reconfigure/Reconfigure config
 def call_service(service, className, *args):
@@ -103,7 +104,14 @@ def qr_message_callback(message):
     if (len(message.data) > 1):
 		Var.qr_mutex.acquire()
 		qr_message = re.split("\r\n", message.data)
-		N = int("".join(list(qr_message[4])[2:]))
+		
+		try:
+			N = int("".join(list(qr_message[4])[2:]))
+		except:
+			print("exception : ", message)
+			Var.qr_mutex.release()
+			return
+
 		if Var.QRMsgs[N-1] is None:
 			QR = QrMessage("QR")
 			QR.x = float("".join(list(qr_message[0])[2:]))
@@ -113,6 +121,7 @@ def qr_message_callback(message):
 			QR.N = N
 			QR.L = "".join(list(qr_message[5])[2:])
 			QR.timestamp = rospy.Time.now().secs
+			QR.print_qr()
 			Var.QRMsgs[QR.N-1] = QR
 			change_code(QR.N, QR.L)
 			Var.jobs.append(QR.N-1)
@@ -128,16 +137,80 @@ def qr_pos_callback(message):
 			if abs(message.header.stamp.secs - QR.timestamp) > Var.tolerance:
 				Var.QRMsgs[Var.jobs[0]] = None
 			else:
-				(trans,orient) = Var.listener.lookupTransform('/map', '/camera_link', rospy.Time())
+				(trans, orient) = Var.listener.lookupTransform('/map', '/camera_optical_link', rospy.Time())
 				quat = np.array([message.pose.position.x, message.pose.position.y, message.pose.position.z, 0])
+				print(orient)
 				iorient = tf.transformations.quaternion_inverse(orient)
+				print(iorient)
 				res = tf.transformations.quaternion_multiply(orient, quat)
-        		res = tf.transformations.quaternion_multiply(res, iorient)
+				res = tf.transformations.quaternion_multiply(res, iorient)
+				print("after multiplication", res)
 				QR.x_map, QR.y_map, QR.z_map = res[:3] + trans
+				# print(QR.x_map, QR.y_map, QR.z_map)
 				QR.observation_complete = True
+				print("new observation : ", QR.x_map, QR.y_map, QR.z_map)
+
+				while True:
+					br = tf.TransformBroadcaster()
+					br.sendTransform((QR.x_map, QR.y_map, QR.z_map),
+				                 	tf.transformations.quaternion_from_euler(0, 0, 0), # roll, pitch, yaw
+				                 	rospy.Time.now(),
+				                 	"code",
+				                 	"map")
+					time.sleep(1)
+					print("send transform")
+
 			Var.jobs.pop(0)
 
 		Var.qr_mutex.release()
+
+def has_hidden_loc_3D():
+	qr_msg = [msg for msg in Var.QRMsgs if msg is not None and msg.observation_complete]
+	if len(qr_msg) <= 2:
+		return False
+
+	vec1 = np.array([qr_msg[0].x_map, qr_msg[0].y_map, qr_msg[0].z_map])
+	vec2 = np.array([qr_msg[1].x_map, qr_msg[1].y_map, qr_msg[1].z_map])
+	vec3 = np.array([qr_msg[2].x_map, qr_msg[2].y_map, qr_msg[2].z_map])
+
+	p1m = vec2 - vec1
+	p2m = vec3 - vec1
+	p3m = np.cross(p1m, p2m)
+	Pm = np.stack([p1m, p2m, p3m], axis=1)
+	print(Pm)
+	iPm = np.linalg.inv(Pm)
+
+	mod_p1m = np.linalg.norm(p1m)
+	mod_p2m = np.linalg.norm(p2m)
+	print('norm p1m : ', np.linalg.norm(p1m))
+	print('norm p2m : ', np.linalg.norm(p2m))
+	print('norm p3m : ', np.linalg.norm(p3m))
+
+	vec1 = np.array([qr_msg[0].x, qr_msg[0].y, 0])
+	vec2 = np.array([qr_msg[1].x, qr_msg[1].y, 0])
+	vec3 = np.array([qr_msg[2].x, qr_msg[2].y, 0])
+
+	p1h = vec2 - vec1
+	p2h = vec3 - vec1
+
+	mod_z1h = np.sqrt((mod_p1m ** 2) - (np.linalg.norm(p1h) ** 2))
+	mod_z2h = np.sqrt((mod_p2m ** 2) - (np.linalg.norm(p2h) ** 2))
+	R = np.zeros((3,3))
+
+	for sign1 in [-1,1]:
+		for sign2 in [-1,1]:
+			p1h[2] = sign1 * mod_z1h
+			p2h[2] = sign2 * mod_z2h
+			p3h = np.cross(p1h, p2h)
+			print('norm p1h : ', np.linalg.norm(p1h))
+			print('norm p2h : ', np.linalg.norm(p2h))
+			print('norm p3h : ', np.linalg.norm(p3h))
+			Ph = np.stack([p1h, p2h, p3h], axis=1)
+			R = Ph.dot(iPm)
+			print('RRt :', np.linalg.det(R))
+			print('det : ', R.dot(R.T))
+
+	return has_hidden_loc()
 
 def has_hidden_loc():
 	qr_msg = [msg for msg in Var.QRMsgs if msg is not None and msg.observation_complete]
@@ -149,6 +222,19 @@ def has_hidden_loc():
 	X_2, Y_2 = qr_msg[1].x_map, qr_msg[1].y_map
 	x_1, y_1 = qr_msg[0].x, qr_msg[0].y
 	x_2, y_2 = qr_msg[1].x, qr_msg[1].y
+
+	vec1 = np.array([qr_msg[0].x_map, qr_msg[0].y_map])
+	vec2 = np.array([qr_msg[1].x_map, qr_msg[1].y_map])
+
+	print("in solver")
+	
+	print("X - Y : ", np.linalg.norm(vec1 - vec2))
+
+	vec1 = np.array([qr_msg[0].x, qr_msg[0].y])
+	vec2 = np.array([qr_msg[1].x, qr_msg[1].y])
+	
+	print("x - y : ", np.linalg.norm(vec1 - vec2))
+
 	A = np.array([[x_1, -y_1, 1, 0],\
 		          [y_1,  x_1, 0, 1],\
 		          [x_2, -y_2, 1, 0],\
@@ -354,7 +440,7 @@ def main():
 				(trans, rots) = listener.lookupTransform('/map','/base_footprint', rospy.Time())
 				increment_heatmap(trans[0], trans[1], kernel)
 				execute_360_turn(client)
-			if has_hidden_loc():
+			if has_hidden_loc_3D():
 				Var.explore_phase = False
 				sub1.unregister()
 				sub2.unregister()
