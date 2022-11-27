@@ -41,13 +41,14 @@ class Var:
 	heatmap = None
 	hidden_2_world = None
 	listener = None
-	min_observation = 2
+	min_observation = 3
 	y_max = 0
 	x_max = 0
 	y_min = 0
 	x_min = 0
 	br = None
 	job = -1
+	# jobs = []
 	tick = 0
 	update_frequency = 4
 	secret_code = "-----"
@@ -130,7 +131,6 @@ def get_feasable_view_pos(position, vector, R=20, num_steps=30):
 def is_zero(quat_1, quat_2):
 	return quat_1[0] == 0 and quat_1[1] == 0 and quat_1[2] == 0 and quat_2[0] == 0 and quat_2[1] == 0 and quat_2[2] == 0
 
-# since no timestamp in msg is provided, assume that current time is msg timestamp
 def qr_message_callback(message, client):
 	if Var.listener is None:
 		return
@@ -156,34 +156,99 @@ def qr_message_callback(message, client):
 			QR.L = "".join(list(qr_message[5])[2:])
 			QR.num_observation = 1 if Var.explore_phase else Var.min_observation + 1
 			QR.observation_complete = not Var.explore_phase
+			QR.timestamp = rospy.Time.now().secs
 			Var.QRMsgs[QR.N-1] = QR
-			change_code(QR.N, QR.L)			
-			
-			if Var.explore_phase:
-				print("in-msg callback observing....")
-				(trans, orient) = Var.listener.lookupTransform('/map', '/base_footprint', rospy.Time())
-				goal_pose = MoveBaseGoal()
-				goal_pose.target_pose.header.frame_id = 'map'
-				goal_pose.target_pose.pose.position.x = trans[0]
-				goal_pose.target_pose.pose.position.y = trans[1]
-				goal_pose.target_pose.pose.position.z = 0
-				goal_pose.target_pose.pose.orientation.x = orient[0]
-				goal_pose.target_pose.pose.orientation.y = orient[1]
-				goal_pose.target_pose.pose.orientation.z = orient[2]
-				goal_pose.target_pose.pose.orientation.w = orient[3]
-				Var.qr_mutex.release()
-				ret, trans, orient = execute_goal(client, goal_pose, 10, block_threads=True)
-				QR.timestamp = rospy.Time.now()
-				Var.qr_mutex.acquire()
+			change_code(QR.N, QR.L)
+		elif Var.QRMsgs[N-1] is not None and Var.QRMsgs[N-1].num_observation < Var.min_observation:
+			QR = Var.QRMsgs[N-1]
+			current_time = rospy.Time.now().secs
+			if (current_time - QR.timestamp) > 1:
+				Var.QRMsgs[N-1] = None
+			else:
+				QR.num_observation += 1
+				print('num_observation : ', QR.num_observation)
 				
-				if ret:
-					QR.trans = trans
-					QR.orient = orient
-					Var.job = N-1
-				else:
-					Var.QRMsgs[N-1] = None
+				QR.timestamp = current_time
+				if QR.num_observation == Var.min_observation:
+					(trans, orient) = Var.listener.lookupTransform('/map', '/base_footprint', rospy.Time())
+					goal_pose = MoveBaseGoal()
+					goal_pose.target_pose.header.frame_id = 'map'
+					goal_pose.target_pose.pose.position.x = trans[0]
+					goal_pose.target_pose.pose.position.y = trans[1]
+					goal_pose.target_pose.pose.position.z = 0
+					goal_pose.target_pose.pose.orientation.x = orient[0]
+					goal_pose.target_pose.pose.orientation.y = orient[1]
+					goal_pose.target_pose.pose.orientation.z = orient[2]
+					goal_pose.target_pose.pose.orientation.w = orient[3]
+					Var.qr_mutex.release()
+					ret, trans, orient = execute_goal(client, goal_pose, 10, block_threads=True)
+					QR.timestamp = rospy.Time.now()
+					Var.qr_mutex.acquire()
+					
+					if ret:
+						QR.trans = trans
+						QR.orient = orient
+						Var.job = N-1
+						# Var.jobs.append(N-1)
+					else:
+						Var.QRMsgs[N-1] = None
 
 		Var.qr_mutex.release()
+
+# since no timestamp in msg is provided, assume that current time is msg timestamp
+# def qr_message_callback(message, client):
+# 	if Var.listener is None:
+# 		return
+
+# 	if (len(message.data) > 1):
+# 		Var.qr_mutex.acquire()
+# 		qr_message = re.split("\r\n", message.data)
+		
+# 		try:
+# 			N = int("".join(list(qr_message[4])[2:]))
+# 		except:
+# 			print("exception : ", message)
+# 			Var.qr_mutex.release()
+# 			return
+
+# 		if Var.QRMsgs[N-1] is None and (Var.job == -1 or not Var.explore_phase):
+# 			QR = QrMessage("QR")
+# 			QR.x = float("".join(list(qr_message[0])[2:]))
+# 			QR.y = float("".join(list(qr_message[1])[2:]))
+# 			QR.x_target = float("".join(list(qr_message[2])[7:]))
+# 			QR.y_target = float("".join(list(qr_message[3])[7:]))
+# 			QR.N = N
+# 			QR.L = "".join(list(qr_message[5])[2:])
+# 			QR.num_observation = 1 if Var.explore_phase else Var.min_observation + 1
+# 			QR.observation_complete = not Var.explore_phase
+# 			Var.QRMsgs[QR.N-1] = QR
+# 			change_code(QR.N, QR.L)			
+			
+# 			if Var.explore_phase:
+# 				print("in-msg callback observing....")
+# 				(trans, orient) = Var.listener.lookupTransform('/map', '/base_footprint', rospy.Time())
+# 				goal_pose = MoveBaseGoal()
+# 				goal_pose.target_pose.header.frame_id = 'map'
+# 				goal_pose.target_pose.pose.position.x = trans[0]
+# 				goal_pose.target_pose.pose.position.y = trans[1]
+# 				goal_pose.target_pose.pose.position.z = 0
+# 				goal_pose.target_pose.pose.orientation.x = orient[0]
+# 				goal_pose.target_pose.pose.orientation.y = orient[1]
+# 				goal_pose.target_pose.pose.orientation.z = orient[2]
+# 				goal_pose.target_pose.pose.orientation.w = orient[3]
+# 				Var.qr_mutex.release()
+# 				ret, trans, orient = execute_goal(client, goal_pose, 10, block_threads=True)
+# 				QR.timestamp = rospy.Time.now()
+# 				Var.qr_mutex.acquire()
+				
+# 				if ret:
+# 					QR.trans = trans
+# 					QR.orient = orient
+# 					Var.job = N-1
+# 				else:
+# 					Var.QRMsgs[N-1] = None
+
+# 		Var.qr_mutex.release()
 
 def qr_pos_callback(message, client): 
 	if(Var.job != -1):
@@ -335,7 +400,7 @@ def has_hidden_loc():
 
 	if min_error > Var.minimum_error:
 		# Var.qr_mutex.release()
-		print("error too high : ", min_error)
+		print("error : %f percent" % (min_error * 100))
 		# return False
 
 	qr_msg = [qr_msg[pair[0]], qr_msg[pair[1]]]
@@ -529,7 +594,8 @@ def execute_round_search(client, inner_radius, outer_radius, timeout, br):
 			continue
 		
 		Var.qr_mutex.acquire()
-		point = np.array([Var.QRMsgs[i].x_target, Var.QRMsgs[i].y_target, 0, 0])
+		point = np.array([Var.QRMsgs[i].x_target, Var.QRMsgs[i].y_target, 0, 1])
+		print(Var.hidden_2_world.dot(point))
 		location = Var.hidden_2_world.dot(point)[:2]
 		point = ((location - np.array([GlobalFrame.pose.position.x, GlobalFrame.pose.position.y])) / GlobalFrame.resolution).astype(np.int32)
 		Var.qr_mutex.release()
@@ -615,11 +681,7 @@ def main():
 
 		r.sleep()
 
-	print(Var.secret_code)
-
-
-if __name__ == '__main__':
-	main()
+	print('the secret code is :', Var.secret_code)
 
 
 
@@ -687,7 +749,7 @@ if __name__ == '__main__':
 
 # 		Var.qr_mutex.release()
 
-# def qr_pos_callback(message): 
+# def qr_pos_callback(message, client): 
 # 	if(len(Var.jobs) > 0):
 # 		Var.qr_mutex.acquire()
 # 		while len(Var.jobs):
@@ -730,7 +792,8 @@ if __name__ == '__main__':
 
 
 
-
+if __name__ == '__main__':
+	main()
 
 # wait in a active while loop through out checking if we receive a qr code.
 # when qr code is detected exit random phase and start 
